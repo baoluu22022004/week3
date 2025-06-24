@@ -180,7 +180,7 @@ if __name__ == '__main__':
                     end_point = (
                         int(centroid[0] + velocity[0] * 3), int(centroid[1] + velocity[1] * 3))
                     cv2.arrowedLine(frame, centroid, end_point,
-                                    (0, 0, 0), 2, tipLength=0.4)
+                                    (0, 0, 255), 2, tipLength=0.4)
 
             # --- COMMENT LẠI PHẦN TÍNH TOÁN XU HƯỚNG CHUNG ---
             # (Vì giờ đây việc quan sát 5 mũi tên đã đủ trực quan)
