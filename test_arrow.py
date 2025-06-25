@@ -5,11 +5,10 @@ import os
 import glob
 from scipy.optimize import linear_sum_assignment
 
-# HÀM TÍNH INTERSECTION OVER UNION (IOU)
 
+# Intersection over Union (IoU), with boxA and boxB in xywh-format
 
 def calculate_iou(boxA, boxB):
-    # ... (code không đổi)
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
@@ -45,7 +44,7 @@ def detect_rain_cells(image):
     for contour in contours:
         area = cv2.contourArea(contour)
         # Tăng ngưỡng diện tích để lọc nhiễu ban đầu tốt hơn
-        if area > 250:
+        if area > 300:
             bbox = cv2.boundingRect(contour)
             detections_with_area.append((area, bbox))
 
@@ -84,7 +83,7 @@ if __name__ == '__main__':
 
         tracked_objects = OrderedDict()
         nextObjectID = 0
-        max_disappeared = 10
+        max_disappeared = 5
 
         sample_image = cv2.imread(image_files[0])
         height, width, _ = sample_image.shape
