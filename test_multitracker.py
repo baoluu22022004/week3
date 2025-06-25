@@ -5,8 +5,8 @@ import os
 import glob
 from scipy.optimize import linear_sum_assignment
 
+# HÀM TÍNH INTERSECTION OVER UNION (IOU)
 
-# Intersection over Union (IoU), with boxA and boxB in xywh-format
 
 def calculate_iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -16,12 +16,10 @@ def calculate_iou(boxA, boxB):
     interArea = max(0, xB - xA) * max(0, yB - yA)
     boxAArea = boxA[2] * boxA[3]
     boxBArea = boxB[2] * boxB[3]
-    if float(boxAArea + boxBArea - interArea) == 0:
-        return 0.0
     iou = interArea / float(boxAArea + boxBArea - interArea)
     return iou
 
-# Detection storm area
+# HÀM PHÁT HIỆN BÃO (không đổi)
 
 
 def detect_rain_cells(image):
@@ -38,29 +36,19 @@ def detect_rain_cells(image):
         hsv_image, lower_yellow_orange, upper_yellow_orange))
     contours, _ = cv2.findContours(
         final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    ##############
-    detections_with_area = []
+    detected_boxes = []
     for contour in contours:
         area = cv2.contourArea(contour)
-    # Threshold to not tracking small storm (noise)
-        if area > 300:
+        if area > 200:
             bbox = cv2.boundingRect(contour)
-            detections_with_area.append((area, bbox))
-
-    sorted_detections = sorted(
-        detections_with_area, key=lambda x: x[0], reverse=True)
-
-    top_5_detections = sorted_detections[:5]
-
-    top_5_boxes = [item[1] for item in top_5_detections]
-
-    return top_5_boxes
+            detected_boxes.append(bbox)
+    return detected_boxes
 
 
+# --- CHƯƠNG TRÌNH CHÍNH VỚI KIẾN TRÚC MỚI ---
 if __name__ == '__main__':
     main_folder = 'Rad_images'
-    output_folder = 'tracking_results_top5'  # Output folder
+    output_folder = 'tracking_results_continuous_detection'
     os.makedirs(output_folder, exist_ok=True)
     event_folders = [f.path for f in os.scandir(main_folder) if f.is_dir()]
 
@@ -76,9 +64,10 @@ if __name__ == '__main__':
                 f"Cảnh báo: Không tìm thấy file ảnh nào trong '{folder}'. Bỏ qua.")
             continue
 
+        # Dictionary để quản lý đối tượng (ID, bbox, màu, đường đi, bộ đếm biến mất)
         tracked_objects = OrderedDict()
         nextObjectID = 0
-        max_disappeared = 5
+        max_disappeared = 5  # Số khung hình cho phép một tracker biến mất
 
         sample_image = cv2.imread(image_files[0])
         height, width, _ = sample_image.shape
@@ -93,67 +82,81 @@ if __name__ == '__main__':
             if frame is None:
                 continue
 
-            # Start tracking
+            # Lấy ra danh sách các tracker và ID đang hoạt động
             active_trackers = cv2.legacy.MultiTracker_create()
+            active_objects = OrderedDict()
             for obj_id, data in tracked_objects.items():
                 if data['disappeared'] == 0:
                     tracker = cv2.legacy.TrackerCSRT_create()
                     active_trackers.add(tracker, frame, data['bbox'])
+                    active_objects[obj_id] = data
+
+            # 1. THEO DÕI: Cập nhật vị trí từ các tracker đang hoạt động
             success, boxes = active_trackers.update(frame)
-            active_ids = [
-                obj_id for obj_id, data in tracked_objects.items() if data['disappeared'] == 0]
+
+            # Cập nhật bbox mới cho các đối tượng
+            active_ids = list(active_objects.keys())
             for j, box in enumerate(boxes):
                 obj_id = active_ids[j]
                 tracked_objects[obj_id]['bbox'] = tuple(box)
 
-            # Return top-5 storms
+            # 2. PHÁT HIỆN: Chạy phát hiện trong mỗi khung hình
             detected_boxes = detect_rain_cells(frame)
 
-            tracked_bboxes_ids = list(tracked_objects.keys())
-            if len(tracked_bboxes_ids) > 0 and len(detected_boxes) > 0:
-                iou_matrix = np.zeros(
-                    (len(tracked_bboxes_ids), len(detected_boxes)), dtype="float")
-                for t, obj_id in enumerate(tracked_bboxes_ids):
-                    for d, detect_box in enumerate(detected_boxes):
-                        iou_matrix[t, d] = calculate_iou(
-                            tracked_objects[obj_id]['bbox'], detect_box)
-                rows, cols = linear_sum_assignment(1 - iou_matrix)
-                used_tracks = set()
-                used_detections = set()
-                for r, c in zip(rows, cols):
-                    if iou_matrix[r, c] < 0.1:
-                        continue
-                    obj_id = tracked_bboxes_ids[r]
-                    tracked_objects[obj_id]['bbox'] = detected_boxes[c]
-                    tracked_objects[obj_id]['disappeared'] = 0
-                    used_tracks.add(r)
-                    used_detections.add(c)
-                for r in set(range(len(tracked_bboxes_ids))).difference(used_tracks):
-                    obj_id = tracked_bboxes_ids[r]
-                    tracked_objects[obj_id]['disappeared'] += 1
-                for c in set(range(len(detected_boxes))).difference(used_detections):
-                    new_id = nextObjectID
-                    hue = (new_id * 40) % 180
-                    hsv_color = np.uint8([[[hue, 255, 255]]])
-                    bgr_color = cv2.cvtColor(
-                        hsv_color, cv2.COLOR_HSV2BGR)[0][0]
-                    tracked_objects[new_id] = {'bbox': detected_boxes[c], 'path': [], 'color': tuple(
-                        bgr_color.tolist()), 'disappeared': 0, 'velocity': np.array([0, 0])}
-                    nextObjectID += 1
-            elif len(detected_boxes) > 0:
-                for c in range(len(detected_boxes)):
-                    new_id = nextObjectID
-                    hue = (new_id * 40) % 180
-                    hsv_color = np.uint8([[[hue, 255, 255]]])
-                    bgr_color = cv2.cvtColor(
-                        hsv_color, cv2.COLOR_HSV2BGR)[0][0]
-                    tracked_objects[new_id] = {'bbox': detected_boxes[c], 'path': [], 'color': tuple(
-                        bgr_color.tolist()), 'disappeared': 0, 'velocity': np.array([0, 0])}
-                    nextObjectID += 1
+            # 3. ĐỐI CHIẾU: Ghép cặp tracker và detection
+            tracked_bboxes = [data['bbox']
+                              for data in tracked_objects.values()]
 
-            # Visualize
+            # Tính ma trận chi phí IoU (cost = 1 - IoU)
+            iou_matrix = np.zeros(
+                (len(tracked_bboxes), len(detected_boxes)), dtype="float")
+            for t, track_box in enumerate(tracked_bboxes):
+                for d, detect_box in enumerate(detected_boxes):
+                    iou_matrix[t, d] = calculate_iou(track_box, detect_box)
+
+            # Dùng Hungarian để tối ưu việc ghép cặp
+            # `cost = 1 - iou`, thuật toán sẽ tìm cách minimize cost, tức là maximize iou
+            rows, cols = linear_sum_assignment(1 - iou_matrix)
+
+            used_tracks = set()
+            used_detections = set()
+
+            # A. Xử lý các cặp được ghép nối
+            for r, c in zip(rows, cols):
+                # Nếu IoU quá thấp, không coi là một cặp
+                if iou_matrix[r, c] < 0.1:
+                    continue
+
+                obj_id = list(tracked_objects.keys())[r]
+                # Cập nhật bbox theo detection cho chính xác
+                tracked_objects[obj_id]['bbox'] = detected_boxes[c]
+                # Reset bộ đếm biến mất
+                tracked_objects[obj_id]['disappeared'] = 0
+                used_tracks.add(r)
+                used_detections.add(c)
+
+            # B. Xử lý các tracker không được ghép nối (bão đã tan)
+            for r in set(range(len(tracked_bboxes))).difference(used_tracks):
+                obj_id = list(tracked_objects.keys())[r]
+                tracked_objects[obj_id]['disappeared'] += 1
+
+            # C. Xử lý các detection không được ghép nối (bão mới xuất hiện)
+            for c in set(range(len(detected_boxes))).difference(used_detections):
+                new_id = nextObjectID
+                hue = (new_id * 40) % 180
+                hsv_color = np.uint8([[[hue, 255, 255]]])
+                bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
+
+                tracked_objects[new_id] = {
+                    'bbox': detected_boxes[c], 'path': [],
+                    'color': tuple(bgr_color.tolist()), 'disappeared': 0
+                }
+                nextObjectID += 1
+
+            # VẼ KẾT QUẢ VÀ DỌN DẸP
             final_objects_to_draw = OrderedDict()
             for obj_id, data in tracked_objects.items():
+                # Chỉ vẽ các đối tượng chưa biến mất quá lâu
                 if data['disappeared'] <= max_disappeared:
                     final_objects_to_draw[obj_id] = data
                     box = data['bbox']
@@ -161,22 +164,20 @@ if __name__ == '__main__':
                     p2 = (int(box[0] + box[2]), int(box[1] + box[3]))
                     centroid = (int(box[0] + box[2] / 2),
                                 int(box[1] + box[3] / 2))
-                    previous_centroid = data['path'][-1] if len(
-                        data['path']) > 0 else centroid
-                    data['velocity'] = np.array(
-                        centroid) - np.array(previous_centroid)
                     data['path'].append(centroid)
+
                     color = data['color']
                     cv2.rectangle(frame, p1, p2, color, 2, 1)
                     cv2.putText(
                         frame, f"ID {obj_id}", (p1[0], p1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                    velocity = data['velocity']
-                    end_point = (
-                        int(centroid[0] + velocity[0] * 3), int(centroid[1] + velocity[1] * 3))
-                    cv2.arrowedLine(frame, centroid, end_point,
-                                    (0, 0, 255), 2, tipLength=0.4)
 
+                    path = data['path']
+                    for k in range(1, len(path)):
+                        cv2.line(frame, path[k - 1], path[k], color, 2)
+
+            # Cập nhật lại danh sách đối tượng sau khi đã dọn dẹp
             tracked_objects = final_objects_to_draw
+
             video_writer.write(frame)
             # cv2.imshow(f"Tracking Event: {event_name}", frame)
 
